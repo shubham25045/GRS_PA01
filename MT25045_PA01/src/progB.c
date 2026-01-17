@@ -9,10 +9,10 @@
 // ---- Struct to pass arguments to each thread ----
 typedef struct {
     const char *worker;     // "cpu" | "mem" | "io"
-    int index;              // thread number (0..N-1), useful for debugging
+    int index;              // thread number (0..N-1)
     size_t mem_mb;          // for mem worker
     size_t file_mb;         // for io worker
-    const char *filepath;   // for io worker
+    char filepath[256];     // per-thread filepath for io
 } ThreadArgs;
 
 // Print correct usage and exit
@@ -21,8 +21,12 @@ static void usage(const char *prog) {
             "Usage:\n"
             "  %s <num_threads> cpu\n"
             "  %s <num_threads> mem <mem_mb>\n"
-            "  %s <num_threads> io <file_mb> <filepath>\n",
-            prog, prog, prog);
+            "  %s <num_threads> io <file_mb> <filepath_prefix>\n\n"
+            "Examples:\n"
+            "  %s 4 cpu\n"
+            "  %s 4 mem 256\n"
+            "  %s 4 io 8 /tmp/pa01_io_thread\n",
+            prog, prog, prog, prog, prog, prog);
     exit(1);
 }
 
@@ -30,7 +34,6 @@ static void usage(const char *prog) {
 static void *thread_main(void *arg) {
     ThreadArgs *a = (ThreadArgs *)arg;
 
-    // Run chosen worker
     if (strcmp(a->worker, "cpu") == 0) {
         worker_cpu(BASE_COUNT);
     } else if (strcmp(a->worker, "mem") == 0) {
@@ -39,7 +42,6 @@ static void *thread_main(void *arg) {
         worker_io(BASE_COUNT, a->filepath, a->file_mb);
     } else {
         fprintf(stderr, "Unknown worker in thread: %s\n", a->worker);
-        // Returning non-NULL indicates an error (we'll check in join)
         return (void *)1;
     }
 
@@ -61,11 +63,14 @@ int main(int argc, char *argv[]) {
     // Defaults (used only for relevant workers)
     size_t mem_mb = 128;
     size_t file_mb = 32;
-    const char *filepath = "/tmp/pa01_io_thread.bin";
+
+    // For IO: user provides a prefix, we generate prefix_<index>.bin
+    const char *filepath_prefix = "/tmp/pa01_io_thread";
 
     // Parse extra args depending on worker type
     if (strcmp(worker, "cpu") == 0) {
         if (argc != 3) usage(argv[0]);
+
     } else if (strcmp(worker, "mem") == 0) {
         if (argc != 4) usage(argv[0]);
         mem_mb = (size_t)strtoul(argv[3], NULL, 10);
@@ -73,14 +78,16 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "mem_mb must be > 0\n");
             return 1;
         }
+
     } else if (strcmp(worker, "io") == 0) {
         if (argc != 5) usage(argv[0]);
         file_mb = (size_t)strtoul(argv[3], NULL, 10);
-        filepath = argv[4];
-        if (file_mb == 0 || filepath == NULL || filepath[0] == '\0') {
-            fprintf(stderr, "file_mb must be > 0 and filepath must be valid\n");
+        filepath_prefix = argv[4];
+        if (file_mb == 0 || filepath_prefix == NULL || filepath_prefix[0] == '\0') {
+            fprintf(stderr, "file_mb must be > 0 and filepath_prefix must be valid\n");
             return 1;
         }
+
     } else {
         fprintf(stderr, "Unknown worker: %s\n", worker);
         usage(argv[0]);
@@ -102,7 +109,16 @@ int main(int argc, char *argv[]) {
         args[i].index = i;
         args[i].mem_mb = mem_mb;
         args[i].file_mb = file_mb;
-        args[i].filepath = filepath;
+
+        // For IO worker: make per-thread file path
+        if (strcmp(worker, "io") == 0) {
+            // Example: /tmp/pa01_io_thread_0.bin
+            snprintf(args[i].filepath, sizeof(args[i].filepath),
+                     "%s_%d.bin", filepath_prefix, i);
+        } else {
+            // Not used for cpu/mem, but keep it valid
+            args[i].filepath[0] = '\0';
+        }
 
         int rc = pthread_create(&tids[i], NULL, thread_main, &args[i]);
         if (rc != 0) {
